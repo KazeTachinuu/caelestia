@@ -7,7 +7,7 @@ if status is-interactive
     command -v zoxide &> /dev/null && zoxide init fish --cmd cd | source
 
     # Better ls
-    alias ls='eza --icons --group-directories-first -1'
+    # alias ls='eza --icons --group-directories-first -1'
 
     # Abbrs
     abbr lg 'lazygit'
@@ -40,3 +40,6 @@ if status is-interactive
         echo -en "\e]133;A\e\\"
     end
 end
+
+# Alias Manager
+am init --hook fish | source
