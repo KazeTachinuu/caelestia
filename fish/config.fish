@@ -43,3 +43,9 @@ end
 
 # Alias Manager
 am init --hook fish | source
+export PATH="$HOME/.local/bin:$PATH"
+
+# Auto-start Hyprland on TTY1
+if test (tty) = /dev/tty1
+    uwsm start hyprland-uwsm.desktop
+end

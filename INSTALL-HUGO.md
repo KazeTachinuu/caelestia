@@ -1,11 +1,11 @@
 # Hugo's Caelestia Setup Guide
 
-Complete guide to reinstall Arch Linux and restore this customized Caelestia setup.
+Complete guide to reinstall Arch Linux with LUKS encryption and restore this customized Caelestia setup.
 
 ## Table of Contents
-1. [Arch Linux Installation](#1-arch-linux-installation)
-2. [Post-Install Base Setup](#2-post-install-base-setup)
-3. [Install Hyprland & Dependencies](#3-install-hyprland--dependencies)
+1. [Pre-Install Backup](#1-pre-install-backup)
+2. [Arch Linux Installation with LUKS](#2-arch-linux-installation-with-luks)
+3. [Post-Install Base Setup](#3-post-install-base-setup)
 4. [Install Caelestia](#4-install-caelestia)
 5. [Restore Custom Configs](#5-restore-custom-configs)
 6. [System Configuration](#6-system-configuration)
@@ -13,129 +13,225 @@ Complete guide to reinstall Arch Linux and restore this customized Caelestia set
 
 ---
 
-## 1. Arch Linux Installation
+## 1. Pre-Install Backup
 
-### Download & Prepare
-1. Download the latest ISO from https://archlinux.org/download/
-2. Verify the signature (recommended)
-3. Create bootable USB: `dd bs=4M if=archlinux.iso of=/dev/sdX status=progress oflag=sync`
-4. Disable Secure Boot in BIOS
+Before reinstalling, backup these items:
 
-### Install using archinstall
-Boot from USB and run:
 ```bash
-archinstall
+# Push any uncommitted dotfile changes
+cd ~/.local/share/caelestia
+git add -A && git commit -m "backup before reinstall" && git push
+
+# Backup user configs
+mkdir -p ~/backup-reinstall
+cp -r ~/.config/caelestia ~/backup-reinstall/
+cp -r ~/.ssh ~/backup-reinstall/
+cp -r ~/Pictures/Wallpapers ~/backup-reinstall/ 2>/dev/null
+
+# Optional: backup privacy patch
+sudo cp /etc/xdg/quickshell/caelestia/modules/lock/NotifGroup.qml ~/backup-reinstall/
+
+# Copy backup to external drive or cloud
 ```
 
-**Recommended settings:**
-| Setting | Value |
-|---------|-------|
-| Language | English |
-| Locale | `en_GB.UTF-8` |
-| Keyboard | Your layout (us, fr, etc.) |
-| Mirror region | Your country |
-| Disk | Use best-effort partition (or manual with BTRFS) |
-| Bootloader | systemd-boot (UEFI) or GRUB |
-| Swap | zram or swap file |
-| Hostname | Your choice |
-| Root password | Set one |
-| User | Create your user with sudo |
-| Profile | Minimal |
-| Audio | Pipewire |
-| Network | NetworkManager |
-| Additional packages | `git base-devel vim fish` |
-
-### Reboot
-```bash
-reboot
-```
+### Backup Checklist
+- [ ] `~/.config/caelestia/` (user overrides)
+- [ ] `~/.ssh/` (SSH keys)
+- [ ] `~/Pictures/Wallpapers/`
+- [ ] Privacy patch NotifGroup.qml (if applied)
+- [ ] Any other personal files
 
 ---
 
-## 2. Post-Install Base Setup
+## 2. Arch Linux Installation with LUKS
 
-### Login and connect to internet
+### Download & Prepare
+1. Download the latest ISO from https://archlinux.org/download/
+2. Verify the signature (optional but recommended)
+3. Create bootable USB: `dd bs=4M if=archlinux.iso of=/dev/sdX status=progress oflag=sync`
+4. Disable Secure Boot in BIOS
+5. Boot from USB
+
+### Connect to Internet
 ```bash
-# If using WiFi
-nmcli device wifi connect "SSID" password "PASSWORD"
+# WiFi
+iwctl
+station wlan0 connect "SSID"
+# Enter password when prompted, then exit
 
-# Verify connection
-ping archlinux.org
+# Verify
+ping -c 3 archlinux.org
 ```
 
-### Update system
+### Partition the Disk
+```bash
+# Identify your disk (usually nvme0n1 or sda)
+lsblk
+
+# Partition with gdisk
+gdisk /dev/nvme0n1
+
+# Delete all existing partitions (d, repeat until empty)
+# Create new partitions:
+#   n, 1, default, +1G, ef00    (EFI System Partition)
+#   n, 2, default, default, 8309 (Linux LUKS)
+# Write and exit: w, y
+```
+
+### Setup LUKS Encryption
+```bash
+# Format the root partition with LUKS (you'll set the encryption password here)
+cryptsetup luksFormat /dev/nvme0n1p2
+
+# Open the encrypted partition
+cryptsetup open /dev/nvme0n1p2 cryptroot
+```
+
+### Format and Mount
+```bash
+# Format partitions
+mkfs.fat -F32 /dev/nvme0n1p1
+mkfs.ext4 /dev/mapper/cryptroot
+
+# Mount
+mount /dev/mapper/cryptroot /mnt
+mount --mkdir /dev/nvme0n1p1 /mnt/boot
+```
+
+### Install Base System
+```bash
+pacstrap -K /mnt base linux linux-firmware intel-ucode \
+    networkmanager vim git base-devel fish sudo
+```
+
+> **Note:** Replace `intel-ucode` with `amd-ucode` for AMD CPUs.
+
+### Generate fstab
+```bash
+genfstab -U /mnt >> /mnt/etc/fstab
+```
+
+### Configure the System (chroot)
+```bash
+arch-chroot /mnt
+```
+
+Inside chroot:
+```bash
+# Timezone
+ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
+hwclock --systohc
+
+# Locale
+echo "en_GB.UTF-8 UTF-8" >> /etc/locale.gen
+locale-gen
+echo "LANG=en_GB.UTF-8" > /etc/locale.conf
+
+# Hostname
+echo "archbox" > /etc/hostname
+
+# Create user
+useradd -m -G wheel -s /usr/bin/fish hugo
+passwd hugo
+
+# Enable sudo for wheel group
+EDITOR=vim visudo
+# Uncomment: %wheel ALL=(ALL:ALL) ALL
+
+# Configure mkinitcpio for LUKS
+vim /etc/mkinitcpio.conf
+# Change HOOKS to:
+# HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)
+
+# Regenerate initramfs
+mkinitcpio -P
+```
+
+### Setup Bootloader (systemd-boot)
+```bash
+# Install bootloader
+bootctl install
+
+# Get UUID of encrypted partition
+blkid /dev/nvme0n1p2
+# Note the UUID (not PARTUUID)
+
+# Create boot entry
+cat > /boot/loader/entries/arch.conf << 'EOF'
+title   Arch Linux
+linux   /vmlinuz-linux
+initrd  /intel-ucode.img
+initrd  /initramfs-linux.img
+options cryptdevice=UUID=YOUR-UUID-HERE:cryptroot root=/dev/mapper/cryptroot rw
+EOF
+
+# Edit the file and replace YOUR-UUID-HERE with actual UUID
+vim /boot/loader/entries/arch.conf
+
+# Configure loader
+cat > /boot/loader/loader.conf << 'EOF'
+default arch.conf
+timeout 3
+editor no
+EOF
+
+# Enable NetworkManager
+systemctl enable NetworkManager
+```
+
+### Setup Autologin (LUKS handles authentication)
+```bash
+# Create autologin drop-in
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --noclear --autologin hugo %I $TERM
+EOF
+```
+
+### Reboot
+```bash
+exit
+umount -R /mnt
+reboot
+```
+
+Remove the USB and boot into your new system. You'll be prompted for the LUKS password, then auto-logged in.
+
+---
+
+## 3. Post-Install Base Setup
+
+### Connect to Internet
+```bash
+# WiFi
+nmcli device wifi connect "SSID" password "PASSWORD"
+
+# Verify
+ping -c 3 archlinux.org
+```
+
+### Update System
 ```bash
 sudo pacman -Syu
 ```
 
-### Install AUR helper (yay)
+### Install AUR Helper (paru)
 ```bash
 sudo pacman -S --needed git base-devel
-git clone https://aur.archlinux.org/yay.git
-cd yay
+git clone https://aur.archlinux.org/paru.git /tmp/paru
+cd /tmp/paru
 makepkg -si
-cd .. && rm -rf yay
+cd ~ && rm -rf /tmp/paru
 ```
 
-### Set shell to fish (optional)
+### Install GPU Drivers
+
+**Intel:**
 ```bash
-chsh -s /usr/bin/fish
+sudo pacman -S mesa vulkan-intel intel-media-driver
 ```
-
----
-
-## 3. Install Hyprland & Dependencies
-
-### Core packages
-```bash
-sudo pacman -S xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-    qt6-base qt6-declarative qt6-wayland qt6-svg \
-    pipewire wireplumber pipewire-pulse pipewire-alsa \
-    polkit-kde-agent power-profiles-daemon \
-    ttf-font-awesome noto-fonts noto-fonts-emoji \
-    grim slurp wl-clipboard cliphist inotify-tools \
-    brightnessctl playerctl ddcutil lm_sensors \
-    thunar foot fish fastfetch btop jq eza \
-    network-manager-applet blueman bluez bluez-utils trash-cli \
-    adw-gtk-theme papirus-icon-theme qt5ct qt6ct
-```
-
-### AUR packages
-**Important:** `quickshell-git` is required (not a tagged release), and `hyprland-git` is needed for Hyprland 0.53+ features.
-
-```bash
-yay -S hyprland-git quickshell-git caelestia-shell caelestia-meta \
-    hyprpicker-git app2unit libcava aubio libqalculate \
-    ttf-jetbrains-mono-nerd ttf-material-symbols-variable-git \
-    ttf-cascadia-code-nerd starship swappy uwsm ghostty
-```
-
-> **Note:** If `caelestia-meta` fails to install, install individual packages above instead.
-
-### Login manager
-Caelestia uses UWSM to manage the Hyprland session. Install a greeter:
-
-```bash
-sudo pacman -S greetd
-yay -S greetd-tuigreet
-```
-
-Configure greetd (`/etc/greetd/config.toml`):
-```toml
-[terminal]
-vt = 1
-
-[default_session]
-command = "tuigreet --time --remember --cmd 'uwsm start hyprland-uwsm.desktop'"
-user = "greeter"
-```
-
-Enable the service:
-```bash
-sudo systemctl enable greetd
-```
-
-### GPU Drivers
 
 **AMD:**
 ```bash
@@ -149,426 +245,160 @@ sudo pacman -S nvidia nvidia-utils nvidia-settings
 sudo mkinitcpio -P
 ```
 
-**Intel:**
-```bash
-sudo pacman -S mesa vulkan-intel intel-media-driver
-```
-
 ---
 
 ## 4. Install Caelestia
 
-### Clone the forked repo
+### Install Core Dependencies
 ```bash
+# Official packages
+sudo pacman -S \
+    xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+    qt6-base qt6-declarative qt6-wayland qt6-svg \
+    pipewire wireplumber pipewire-pulse pipewire-alsa pipewire-jack \
+    polkit-kde-agent power-profiles-daemon \
+    noto-fonts noto-fonts-emoji \
+    grim slurp wl-clipboard cliphist inotify-tools \
+    brightnessctl playerctl ddcutil \
+    thunar foot fish fastfetch btop jq eza \
+    network-manager-applet blueman bluez bluez-utils trash-cli \
+    adw-gtk-theme papirus-icon-theme
+
+# AUR packages (WITHOUT quickshell - we install pinned version separately)
+paru -S hyprland-git caelestia-shell caelestia-cli \
+    hyprpicker-git app2unit libcava aubio libqalculate \
+    ttf-jetbrains-mono-nerd ttf-material-symbols-variable-git \
+    ttf-cascadia-code-nerd starship swappy uwsm ghostty
+```
+
+### Clone Dotfiles and Install Pinned Quickshell
+```bash
+# Clone the forked repo (use HTTPS if SSH not set up yet)
 git clone git@github.com:KazeTachinuu/caelestia.git ~/.local/share/caelestia
-```
-
-If SSH not set up yet, use HTTPS:
-```bash
-git clone https://github.com/KazeTachinuu/caelestia.git ~/.local/share/caelestia
-```
-
-### Run install script
-```bash
 cd ~/.local/share/caelestia
-./install.fish
+
+# Install pinned quickshell FIRST (fixes lock screen rendering)
+./install-hugo.fish --pin-quickshell
+
+# Run base install script
+./install.fish --zen --spotify --vscode=codium
+
+# Run Hugo's customization script (creates configs, sets up auto-start)
+./install-hugo.fish
+
+# Optional: Apply privacy patch (hides notification body on lock screen)
+./install-hugo.fish --privacy-patch
 ```
 
-This creates symlinks for all config files.
-
-### Enable required services
+### Enable Required Services
 ```bash
 sudo systemctl enable --now power-profiles-daemon
 sudo systemctl enable --now NetworkManager
 sudo systemctl enable --now bluetooth
 ```
 
-### Reboot and start Hyprland
-After rebooting, the greetd login manager will start. Log in and Hyprland should launch automatically with the Caelestia shell.
+### Reboot
+```bash
+reboot
+```
+
+After LUKS password entry, you'll be auto-logged in and Hyprland will start automatically.
 
 ---
 
-## 5. Restore Custom Configs
+## 5. Custom Configs Reference
 
-### User configs
-Copy these files to `~/.config/caelestia/`:
+The `install-hugo.fish` script creates these automatically, but here's what they contain:
 
-**hypr-vars.conf:**
+### `~/.config/caelestia/hypr-vars.conf`
 ```bash
-# Apps
+# Terminal (ghostty instead of foot)
 $terminal = ghostty
 
-# Keybinds
+# Custom keybinds
 $kbTerminal = Super, Return
 $kbMoveWinToWs = Super+Shift
 $kbBrowser = Super, B
 $kbLock = Super, X
 ```
 
-**hypr-user.conf:**
+### `~/.config/caelestia/hypr-user.conf`
 ```bash
-# Input overrides
+# Touchpad settings
 input:touchpad {
     natural_scroll = false
 }
 ```
 
-### Privacy-friendly lock screen notifications
-Replace the system NotifGroup.qml to hide notification content on lock screen:
-
-```bash
-sudo cp ~/dotfiles-backup/NotifGroup-privacy.qml /etc/xdg/quickshell/caelestia/modules/lock/NotifGroup.qml
-```
-
-<details>
-<summary>NotifGroup-privacy.qml content (click to expand)</summary>
-
-```qml
-pragma ComponentBehavior: Bound
-
-import qs.components
-import qs.components.effects
-import qs.services
-import qs.config
-import qs.utils
-import Quickshell
-import Quickshell.Widgets
-import Quickshell.Services.Notifications
-import QtQuick
-import QtQuick.Layouts
-
-StyledRect {
-    id: root
-
-    required property string modelData
-
-    readonly property list<var> notifs: Notifs.list.filter(notif => notif.appName === modelData)
-    readonly property string image: notifs.find(n => n.image.length > 0)?.image ?? ""
-    readonly property string appIcon: notifs.find(n => n.appIcon.length > 0)?.appIcon ?? ""
-    readonly property string urgency: notifs.some(n => n.urgency === NotificationUrgency.Critical) ? "critical" : notifs.some(n => n.urgency === NotificationUrgency.Normal) ? "normal" : "low"
-
-    property bool expanded
-
-    anchors.left: parent?.left
-    anchors.right: parent?.right
-    implicitHeight: content.implicitHeight + Appearance.padding.normal * 2
-
-    clip: true
-    radius: Appearance.rounding.normal
-    color: root.urgency === "critical" ? Colours.palette.m3secondaryContainer : Colours.layer(Colours.palette.m3surfaceContainerHigh, 2)
-
-    RowLayout {
-        id: content
-
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: Appearance.padding.normal
-
-        spacing: Appearance.spacing.normal
-
-        Item {
-            Layout.alignment: Qt.AlignLeft | Qt.AlignTop
-            implicitWidth: Config.notifs.sizes.image
-            implicitHeight: Config.notifs.sizes.image
-
-            Component {
-                id: imageComp
-
-                Image {
-                    source: Qt.resolvedUrl(root.image)
-                    fillMode: Image.PreserveAspectCrop
-                    cache: false
-                    asynchronous: true
-                    width: Config.notifs.sizes.image
-                    height: Config.notifs.sizes.image
-                }
-            }
-
-            Component {
-                id: appIconComp
-
-                ColouredIcon {
-                    implicitSize: Math.round(Config.notifs.sizes.image * 0.6)
-                    source: Quickshell.iconPath(root.appIcon)
-                    colour: root.urgency === "critical" ? Colours.palette.m3onError : root.urgency === "low" ? Colours.palette.m3onSurface : Colours.palette.m3onSecondaryContainer
-                    layer.enabled: root.appIcon.endsWith("symbolic")
-                }
-            }
-
-            Component {
-                id: materialIconComp
-
-                MaterialIcon {
-                    text: Icons.getNotifIcon(root.notifs[0]?.summary, root.urgency)
-                    color: root.urgency === "critical" ? Colours.palette.m3onError : root.urgency === "low" ? Colours.palette.m3onSurface : Colours.palette.m3onSecondaryContainer
-                    font.pointSize: Appearance.font.size.large
-                }
-            }
-
-            ClippingRectangle {
-                anchors.fill: parent
-                color: root.urgency === "critical" ? Colours.palette.m3error : root.urgency === "low" ? Colours.layer(Colours.palette.m3surfaceContainerHighest, 3) : Colours.palette.m3secondaryContainer
-                radius: Appearance.rounding.full
-
-                Loader {
-                    anchors.centerIn: parent
-                    asynchronous: true
-                    sourceComponent: root.image ? imageComp : root.appIcon ? appIconComp : materialIconComp
-                }
-            }
-
-            Loader {
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                asynchronous: true
-                active: root.appIcon && root.image
-
-                sourceComponent: StyledRect {
-                    implicitWidth: Config.notifs.sizes.badge
-                    implicitHeight: Config.notifs.sizes.badge
-
-                    color: root.urgency === "critical" ? Colours.palette.m3error : root.urgency === "low" ? Colours.palette.m3surfaceContainerHighest : Colours.palette.m3secondaryContainer
-                    radius: Appearance.rounding.full
-
-                    ColouredIcon {
-                        anchors.centerIn: parent
-                        implicitSize: Math.round(Config.notifs.sizes.badge * 0.6)
-                        source: Quickshell.iconPath(root.appIcon)
-                        colour: root.urgency === "critical" ? Colours.palette.m3onError : root.urgency === "low" ? Colours.palette.m3onSurface : Colours.palette.m3onSecondaryContainer
-                        layer.enabled: root.appIcon.endsWith("symbolic")
-                    }
-                }
-            }
-        }
-
-        ColumnLayout {
-            Layout.topMargin: -Appearance.padding.small
-            Layout.bottomMargin: -Appearance.padding.small / 2 - (root.expanded ? 0 : spacing)
-            Layout.fillWidth: true
-            spacing: Math.round(Appearance.spacing.small / 2)
-
-            RowLayout {
-                Layout.bottomMargin: -parent.spacing
-                Layout.fillWidth: true
-                spacing: Appearance.spacing.smaller
-
-                StyledText {
-                    Layout.fillWidth: true
-                    text: root.modelData
-                    color: Colours.palette.m3onSurfaceVariant
-                    font.pointSize: Appearance.font.size.small
-                    elide: Text.ElideRight
-                }
-
-                StyledText {
-                    animate: true
-                    text: root.notifs[0]?.timeStr ?? ""
-                    color: Colours.palette.m3outline
-                    font.pointSize: Appearance.font.size.small
-                }
-
-                StyledRect {
-                    implicitWidth: expandBtn.implicitWidth + Appearance.padding.smaller * 2
-                    implicitHeight: groupCount.implicitHeight + Appearance.padding.small
-
-                    color: root.urgency === "critical" ? Colours.palette.m3error : Colours.layer(Colours.palette.m3surfaceContainerHighest, 2)
-                    radius: Appearance.rounding.full
-
-                    opacity: root.notifs.length > Config.notifs.groupPreviewNum ? 1 : 0
-                    Layout.preferredWidth: root.notifs.length > Config.notifs.groupPreviewNum ? implicitWidth : 0
-
-                    StateLayer {
-                        color: root.urgency === "critical" ? Colours.palette.m3onError : Colours.palette.m3onSurface
-
-                        function onClicked(): void {
-                            root.expanded = !root.expanded;
-                        }
-                    }
-
-                    RowLayout {
-                        id: expandBtn
-
-                        anchors.centerIn: parent
-                        spacing: Appearance.spacing.small / 2
-
-                        StyledText {
-                            id: groupCount
-
-                            Layout.leftMargin: Appearance.padding.small / 2
-                            animate: true
-                            text: root.notifs.length
-                            color: root.urgency === "critical" ? Colours.palette.m3onError : Colours.palette.m3onSurface
-                            font.pointSize: Appearance.font.size.small
-                        }
-
-                        MaterialIcon {
-                            Layout.rightMargin: -Appearance.padding.small / 2
-                            animate: true
-                            text: root.expanded ? "expand_less" : "expand_more"
-                            color: root.urgency === "critical" ? Colours.palette.m3onError : Colours.palette.m3onSurface
-                        }
-                    }
-
-                    Behavior on opacity {
-                        Anim {}
-                    }
-
-                    Behavior on Layout.preferredWidth {
-                        Anim {}
-                    }
-                }
-            }
-
-            Repeater {
-                model: ScriptModel {
-                    values: root.notifs.slice(0, Config.notifs.groupPreviewNum)
-                }
-
-                NotifLine {
-                    id: notif
-
-                    ParallelAnimation {
-                        running: true
-
-                        Anim {
-                            target: notif
-                            property: "opacity"
-                            from: 0
-                            to: 1
-                        }
-                        Anim {
-                            target: notif
-                            property: "scale"
-                            from: 0.7
-                            to: 1
-                        }
-                        Anim {
-                            target: notif.Layout
-                            property: "preferredHeight"
-                            from: 0
-                            to: notif.implicitHeight
-                        }
-                    }
-
-                    ParallelAnimation {
-                        running: notif.modelData.closed
-                        onFinished: notif.modelData.unlock(notif)
-
-                        Anim {
-                            target: notif
-                            property: "opacity"
-                            to: 0
-                        }
-                        Anim {
-                            target: notif
-                            property: "scale"
-                            to: 0.7
-                        }
-                        Anim {
-                            target: notif.Layout
-                            property: "preferredHeight"
-                            to: 0
-                        }
-                    }
-                }
-            }
-
-            Loader {
-                Layout.fillWidth: true
-
-                opacity: root.expanded ? 1 : 0
-                Layout.preferredHeight: root.expanded ? implicitHeight : 0
-                active: opacity > 0
-                asynchronous: true
-
-                sourceComponent: ColumnLayout {
-                    Repeater {
-                        model: ScriptModel {
-                            values: root.notifs.slice(Config.notifs.groupPreviewNum)
-                        }
-
-                        NotifLine {}
-                    }
-                }
-
-                Behavior on opacity {
-                    Anim {}
-                }
-            }
-        }
-    }
-
-    Behavior on implicitHeight {
-        Anim {
-            duration: Appearance.anim.durations.expressiveDefaultSpatial
-            easing.bezierCurve: Appearance.anim.curves.expressiveDefaultSpatial
-        }
-    }
-
-    // Only change: show summary/title only, hide body content
-    component NotifLine: StyledText {
-        id: notifLine
-
-        required property Notifs.Notif modelData
-
-        Layout.fillWidth: true
-        text: modelData.summary.replace(/\n/g, " ")
-        color: root.urgency === "critical" ? Colours.palette.m3onSecondaryContainer : Colours.palette.m3onSurface
-        elide: Text.ElideRight
-
-        Component.onCompleted: modelData.lock(this)
-        Component.onDestruction: modelData.unlock(this)
+### `~/.config/caelestia/shell.json`
+```json
+{
+    "services": {
+        "weatherLocation": "Paris"
     }
 }
 ```
-</details>
 
 ---
 
 ## 6. System Configuration
 
-### Set locale to European (Celsius, 24h, metric)
-```bash
-sudo localectl set-locale LANG=en_GB.UTF-8
-```
-
-### Set timezone
-```bash
-sudo timedatectl set-timezone Europe/Paris
-```
-
-### Configure git
+### Git Config
 ```bash
 git config --global user.email "hugo.sibony@epita.fr"
 git config --global user.name "Hugo Sibony"
 ```
 
-### SSH key for GitHub
+### SSH Key for GitHub
 ```bash
 ssh-keygen -t ed25519 -C "hugo.sibony@epita.fr"
 cat ~/.ssh/id_ed25519.pub
-# Add to GitHub: Settings > SSH Keys
+# Add to GitHub: Settings > SSH Keys > New SSH Key
+```
+
+### Additional Tools
+```bash
+# Developer tools
+paru -S neovim fd bat lazygit
+
+# Optional
+paru -S zoxide direnv
 ```
 
 ---
 
 ## 7. Troubleshooting
 
-### Lock screen not rendering properly
-Rebuild quickshell after Qt updates:
+### Lock Screen Not Rendering Fully
+If the lock screen appears incomplete and requires print screen to refresh:
+
 ```bash
-yay -S quickshell-git --rebuild
+# Pin quickshell to the official tested commit
+paru -G quickshell-git
+cd quickshell-git
+
+# Add prepare() function to PKGBUILD after pkgver():
+# prepare() {
+#   cd "$_pkgsrc"
+#   git checkout 41828c4180fb921df7992a5405f5ff05d2ac2fff
+# }
+
+makepkg -si
 caelestia shell -k && caelestia shell -d
 ```
 
-### Hyprland windowrule errors
-This fork already includes fixes for Hyprland 0.53+ syntax. If you see errors:
+For Qt updates, rebuild quickshell:
+```bash
+paru -S quickshell-git --rebuild
+caelestia shell -k && caelestia shell -d
+```
+
+### Hyprland Windowrule Errors
+This fork includes fixes for Hyprland 0.53+ syntax. If you see errors:
 - `float` should be `float on`
 - `match:float` should be `match:float 1`
-- `match:fullscreen false` should be `match:fullscreen 0`
 
-### Shell not starting
+### Shell Not Starting
 ```bash
 # Check logs
 caelestia shell -l
@@ -578,47 +408,40 @@ caelestia shell -k
 caelestia shell -d
 ```
 
-### Weather not showing
-Set your location in `~/.config/caelestia/shell.json`:
-```json
-"services": {
-    "weatherLocation": "Paris",
-    ...
-}
+### LUKS Password Not Accepted
+If you forget the LUKS password, data is unrecoverable. Use a password manager.
+
+### Autologin Not Working
+Check the getty override:
+```bash
+systemctl status getty@tty1
+cat /etc/systemd/system/getty@tty1.service.d/autologin.conf
 ```
 
 ---
 
 ## Quick Reference
 
-### Keybinds (customized)
+### Keybinds (Customized)
 | Key | Action |
 |-----|--------|
 | `Super + Return` | Terminal (ghostty) |
-| `Super + B` | Browser |
-| `Super + X` | Lock |
+| `Super + B` | Browser (zen) |
+| `Super + X` | Lock screen |
 | `Super + Q` | Close window |
 | `Super + Shift + 1-9` | Move window to workspace |
 | `Super + 1-9` | Go to workspace |
+| `Super + S` | Special workspace |
+| `Ctrl + Alt + Delete` | Session menu |
 
-### Important paths
+### Important Paths
 | Path | Description |
 |------|-------------|
 | `~/.local/share/caelestia/` | Dotfiles repo |
 | `~/.config/caelestia/` | User overrides |
 | `~/.config/caelestia/shell.json` | Shell config |
 | `~/.config/hypr/` | Symlinked Hyprland config |
-
----
-
-## Backup Checklist
-
-Before reinstalling, backup:
-- [ ] `~/.config/caelestia/` (user configs)
-- [ ] `~/.config/caelestia/shell.json` (shell settings)
-- [ ] `/etc/xdg/quickshell/caelestia/modules/lock/NotifGroup.qml` (privacy patch)
-- [ ] `~/.ssh/` (SSH keys)
-- [ ] Any wallpapers in `~/Pictures/Wallpapers/`
+| `/etc/xdg/quickshell/caelestia/` | System shell configs |
 
 ---
 
