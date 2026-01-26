@@ -6,6 +6,7 @@
 argparse -n 'install-hugo.fish' -X 0 \
     'h/help' \
     'privacy-patch' \
+    'battery-patch' \
     'pin-quickshell' \
     'skip-packages' \
     'skip-configs' \
@@ -14,13 +15,14 @@ argparse -n 'install-hugo.fish' -X 0 \
 or exit
 
 if set -q _flag_h
-    echo 'usage: ./install-hugo.fish [-h] [--privacy-patch] [--pin-quickshell] [--skip-packages] [--skip-configs] [--skip-autostart]'
+    echo 'usage: ./install-hugo.fish [-h] [--privacy-patch] [--battery-patch] [--pin-quickshell] [--skip-packages] [--skip-configs] [--skip-autostart]'
     echo
     echo "Hugo's post-install customization script. Run after ./install.fish"
     echo
     echo 'options:'
     echo '  -h, --help          show this help message and exit'
     echo '  --privacy-patch     apply privacy patch to lock screen notifications'
+    echo '  --battery-patch     add battery percentage to bar + battery tab in dashboard'
     echo '  --pin-quickshell    rebuild quickshell pinned to tested commit (fixes lock screen)'
     echo '  --skip-packages     skip installing additional packages'
     echo '  --skip-configs      skip setting up user configs'
@@ -200,7 +202,107 @@ if set -q _flag_privacy_patch; and test -L ~/.config/hypr
 end
 
 # ─────────────────────────────────────────────────────────
-# 4. Pin Quickshell to Tested Commit (optional)
+# 4. Apply Battery Patch (optional)
+# ─────────────────────────────────────────────────────────
+if set -q _flag_battery_patch; and test -L ~/.config/hypr
+    set -l qs_modules /etc/xdg/quickshell/caelestia/modules
+    set -l patches_applied 0
+
+    log 'Applying battery patches...'
+
+    # Patch 1: StatusIcons - add battery percentage to bar
+    set -l status_icons_file $qs_modules/bar/components/StatusIcons.qml
+    set -l status_icons_patch $script_dir/patches/StatusIcons-battery-percent.qml
+    if test -f $status_icons_patch; and test -f $status_icons_file
+        if not grep -q 'Battery percentage text' $status_icons_file
+            log 'Adding battery percentage to status bar...'
+            sudo cp $status_icons_file $status_icons_file.orig
+            sudo cp $status_icons_patch $status_icons_file
+            set patches_applied (math $patches_applied + 1)
+        else
+            success 'StatusIcons battery percentage already applied'
+        end
+    else
+        warn 'StatusIcons patch files not found'
+    end
+
+    # Patch 2: Performance tab (clean version without battery, battery is in its own tab)
+    set -l perf_file $qs_modules/dashboard/Performance.qml
+    set -l perf_patch $script_dir/patches/Performance.qml
+    if test -f $perf_patch; and test -f $perf_file
+        # Check if battery was removed from Performance (no UPower import)
+        if grep -q 'Quickshell.Services.UPower' $perf_file
+            log 'Cleaning Performance tab (removing battery)...'
+            sudo cp $perf_file $perf_file.orig
+            sudo cp $perf_patch $perf_file
+            set patches_applied (math $patches_applied + 1)
+        else
+            success 'Performance tab already clean'
+        end
+    else
+        warn 'Performance patch files not found'
+    end
+
+    # Patch 3: Dashboard Tabs - add Battery tab
+    set -l tabs_file $qs_modules/dashboard/Tabs.qml
+    set -l tabs_patch $script_dir/patches/dashboard-Tabs.qml
+    if test -f $tabs_patch; and test -f $tabs_file
+        if not grep -q 'battery_full' $tabs_file
+            log 'Adding Battery tab to dashboard...'
+            sudo cp $tabs_file $tabs_file.orig
+            sudo cp $tabs_patch $tabs_file
+            set patches_applied (math $patches_applied + 1)
+        else
+            success 'Dashboard Battery tab already applied'
+        end
+    else
+        warn 'Tabs patch files not found'
+    end
+
+    # Patch 4: Dashboard Content - add Battery pane
+    set -l content_file $qs_modules/dashboard/Content.qml
+    set -l content_patch $script_dir/patches/dashboard-Content.qml
+    if test -f $content_patch; and test -f $content_file
+        if not grep -q 'Battery {}' $content_file
+            log 'Adding Battery pane to dashboard...'
+            sudo cp $content_file $content_file.orig
+            sudo cp $content_patch $content_file
+            set patches_applied (math $patches_applied + 1)
+        else
+            success 'Dashboard Battery pane already applied'
+        end
+    else
+        warn 'Content patch files not found'
+    end
+
+    # Patch 5: Battery.qml component (Resource circles style)
+    set -l battery_file $qs_modules/dashboard/Battery.qml
+    set -l battery_patch $script_dir/patches/dashboard-Battery.qml
+    if test -f $battery_patch
+        # Check if using new Resource circles style (has "component Resource")
+        if not test -f $battery_file; or not grep -q 'component Resource' $battery_file
+            log 'Updating Battery.qml component...'
+            if test -f $battery_file
+                sudo cp $battery_file $battery_file.orig
+            end
+            sudo cp $battery_patch $battery_file
+            set patches_applied (math $patches_applied + 1)
+        else
+            success 'Battery.qml component already up to date'
+        end
+    else
+        warn 'Battery.qml patch file not found'
+    end
+
+    if test $patches_applied -gt 0
+        success "Applied $patches_applied battery patches. Restart shell: caelestia shell -k && caelestia shell -d"
+    else
+        success 'All battery patches already applied'
+    end
+end
+
+# ─────────────────────────────────────────────────────────
+# 5. Pin Quickshell to Tested Commit (optional)
 # ─────────────────────────────────────────────────────────
 if set -q _flag_pin_quickshell
     set -l qs_pkgbuild_dir $script_dir/patches/quickshell-git
@@ -238,7 +340,7 @@ if set -q _flag_pin_quickshell
 end
 
 # ─────────────────────────────────────────────────────────
-# 5. Setup Hyprland Auto-Start
+# 6. Setup Hyprland Auto-Start
 # ─────────────────────────────────────────────────────────
 if not set -q _flag_skip_autostart; and test -L ~/.config/hypr
     set -l fish_config ~/.config/fish/config.fish
@@ -264,7 +366,7 @@ if not set -q _flag_skip_autostart; and test -L ~/.config/hypr
 end
 
 # ─────────────────────────────────────────────────────────
-# 6. Reload Hyprland
+# 7. Reload Hyprland
 # ─────────────────────────────────────────────────────────
 if pgrep -x Hyprland &>/dev/null; and test -L ~/.config/hypr
     log 'Reloading Hyprland config...'
@@ -281,6 +383,7 @@ echo
 log 'Next steps:'
 echo '  1. Fix lock screen rendering: ./install-hugo.fish --pin-quickshell'
 echo '  2. Apply privacy patch: ./install-hugo.fish --privacy-patch'
-echo '  3. Configure git: git config --global user.email "hugo.sibony@epita.fr"'
-echo '  4. Generate SSH key: ssh-keygen -t ed25519 -C "hugo.sibony@epita.fr"'
-echo '  5. Reboot to test auto-start'
+echo '  3. Apply battery patches: ./install-hugo.fish --battery-patch'
+echo '  4. Configure git: git config --global user.email "hugo.sibony@epita.fr"'
+echo '  5. Generate SSH key: ssh-keygen -t ed25519 -C "hugo.sibony@epita.fr"'
+echo '  6. Reboot to test auto-start'
