@@ -47,3 +47,10 @@ export PATH="$HOME/.local/bin:$PATH"
 
 set -gx EDITOR nvim
 set -gx VISUAL nvim
+export SUDO_ASKPASS=/usr/bin/ksshaskpass
+alias sudo="sudo -A"
+
+# Auto-start Hyprland on TTY1
+if test (tty) = /dev/tty1
+    uwsm start hyprland-uwsm.desktop
+end
