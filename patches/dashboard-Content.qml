@@ -5,6 +5,7 @@ import qs.components.filedialog
 import qs.config
 import Quickshell
 import Quickshell.Widgets
+import Quickshell.Services.UPower
 import QtQuick
 import QtQuick.Layouts
 
@@ -108,7 +109,10 @@ Item {
                 }
 
                 Pane {
+                    readonly property bool show: UPower.displayDevice.isLaptopBattery
                     index: 3
+                    visible: show
+                    Layout.preferredWidth: show ? -1 : 0
                     sourceComponent: Battery {}
                 }
 

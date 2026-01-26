@@ -6,6 +6,7 @@ import qs.services
 import qs.config
 import Quickshell
 import Quickshell.Widgets
+import Quickshell.Services.UPower
 import QtQuick
 import QtQuick.Controls
 
@@ -46,8 +47,19 @@ Item {
         }
 
         Tab {
+            id: batteryTab
+            readonly property bool show: UPower.displayDevice.isLaptopBattery
+            clip: true
             iconName: "battery_full"
             text: qsTr("Battery")
+
+            states: State {
+                when: !batteryTab.show
+                PropertyChanges {
+                    target: batteryTab
+                    width: 0
+                }
+            }
         }
 
         Tab {
