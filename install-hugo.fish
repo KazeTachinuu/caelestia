@@ -5,8 +5,10 @@
 
 argparse -n 'install-hugo.fish' -X 0 \
     'h/help' \
+    'all' \
     'privacy-patch' \
     'battery-patch' \
+    'gpu-patch' \
     'pin-quickshell' \
     'skip-packages' \
     'skip-configs' \
@@ -15,19 +17,28 @@ argparse -n 'install-hugo.fish' -X 0 \
 or exit
 
 if set -q _flag_h
-    echo 'usage: ./install-hugo.fish [-h] [--privacy-patch] [--battery-patch] [--pin-quickshell] [--skip-packages] [--skip-configs] [--skip-autostart]'
+    echo 'usage: ./install-hugo.fish [-h] [--all] [--privacy-patch] [--battery-patch] [--gpu-patch] [--pin-quickshell] [--skip-packages] [--skip-configs] [--skip-autostart]'
     echo
     echo "Hugo's post-install customization script. Run after ./install.fish"
     echo
     echo 'options:'
     echo '  -h, --help          show this help message and exit'
+    echo '  --all               apply all patches (privacy, battery, gpu)'
     echo '  --privacy-patch     apply privacy patch to lock screen notifications'
     echo '  --battery-patch     add battery percentage to bar + battery tab in dashboard'
+    echo '  --gpu-patch         add Intel GPU support to performance dashboard'
     echo '  --pin-quickshell    rebuild quickshell pinned to tested commit (fixes lock screen)'
     echo '  --skip-packages     skip installing additional packages'
     echo '  --skip-configs      skip setting up user configs'
     echo '  --skip-autostart    skip adding Hyprland auto-start to fish'
     exit
+end
+
+# --all enables all patches
+if set -q _flag_all
+    set -g _flag_privacy_patch 1
+    set -g _flag_battery_patch 1
+    set -g _flag_gpu_patch 1
 end
 
 # Helper functions
@@ -226,18 +237,17 @@ if set -q _flag_battery_patch; and test -L ~/.config/hypr
         warn 'StatusIcons patch files not found'
     end
 
-    # Patch 2: Performance tab (clean version without battery, battery is in its own tab)
+    # Patch 2: Performance tab (adjusted padding)
     set -l perf_file $qs_modules/dashboard/Performance.qml
     set -l perf_patch $script_dir/patches/Performance.qml
     if test -f $perf_patch; and test -f $perf_file
-        # Check if battery was removed from Performance (no UPower import)
-        if grep -q 'Quickshell.Services.UPower' $perf_file
-            log 'Cleaning Performance tab (removing battery)...'
+        if not diff -q $perf_patch $perf_file &>/dev/null
+            log 'Applying Performance patch...'
             sudo cp $perf_file $perf_file.orig
             sudo cp $perf_patch $perf_file
             set patches_applied (math $patches_applied + 1)
         else
-            success 'Performance tab already clean'
+            success 'Performance patch already applied'
         end
     else
         warn 'Performance patch files not found'
@@ -302,7 +312,73 @@ if set -q _flag_battery_patch; and test -L ~/.config/hypr
 end
 
 # ─────────────────────────────────────────────────────────
-# 5. Pin Quickshell to Tested Commit (optional)
+# 5. Apply GPU Patch (optional)
+# ─────────────────────────────────────────────────────────
+if set -q _flag_gpu_patch; and test -L ~/.config/hypr
+    set -l qs_services /etc/xdg/quickshell/caelestia/services
+    set -l usage_file $qs_services/SystemUsage.qml
+    set -l usage_patch $script_dir/patches/SystemUsage.qml
+
+    log 'Applying GPU patches...'
+
+    # Patch SystemUsage.qml for Intel GPU support
+    if test -f $usage_patch; and test -f $usage_file
+        if not grep -q 'INTEL' $usage_file
+            log 'Adding Intel GPU support to SystemUsage...'
+            sudo cp $usage_file $usage_file.orig
+            sudo cp $usage_patch $usage_file
+            success 'Intel GPU support added'
+        else
+            success 'Intel GPU support already applied'
+        end
+    else
+        warn 'SystemUsage patch files not found'
+    end
+
+    # Install intel-gpu-usage helper script (always check)
+    if not test -f /usr/local/bin/intel-gpu-usage
+        log 'Installing intel-gpu-usage helper script...'
+        printf '%s\n' \
+            '#!/usr/bin/env python3' \
+            'import subprocess, json, signal, time, sys' \
+            'try:' \
+            '    proc = subprocess.Popen(["intel_gpu_top", "-J", "-s", "400"],' \
+            '                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)' \
+            '    time.sleep(0.4)' \
+            '    proc.send_signal(signal.SIGTERM)' \
+            '    data = proc.stdout.read().decode()' \
+            '    start = data.find("{")' \
+            '    if start < 0: print(0); sys.exit(0)' \
+            '    depth = 0' \
+            '    for i, c in enumerate(data[start:], start):' \
+            '        if c == "{": depth += 1' \
+            '        elif c == "}": depth -= 1' \
+            '        if depth == 0:' \
+            '            obj = json.loads(data[start:i+1])' \
+            '            print(obj.get("engines", {}).get("Render/3D", {}).get("busy", 0))' \
+            '            sys.exit(0)' \
+            '    print(0)' \
+            'except: print(0)' \
+            | sudo tee /usr/local/bin/intel-gpu-usage > /dev/null
+        sudo chmod +x /usr/local/bin/intel-gpu-usage
+        success 'intel-gpu-usage script installed'
+    end
+
+    # Set capability for intel_gpu_top (allows non-root usage)
+    if command -v intel_gpu_top &>/dev/null
+        if not getcap (which intel_gpu_top) 2>/dev/null | grep -q cap_perfmon
+            log 'Setting CAP_PERFMON on intel_gpu_top...'
+            sudo setcap cap_perfmon=ep (which intel_gpu_top) 2>/dev/null
+            and success 'Capability set'
+            or warn 'Could not set capability'
+        end
+    else
+        warn 'intel_gpu_top not found. Install intel-gpu-tools for Intel GPU monitoring.'
+    end
+end
+
+# ─────────────────────────────────────────────────────────
+# 6. Pin Quickshell to Tested Commit (optional)
 # ─────────────────────────────────────────────────────────
 if set -q _flag_pin_quickshell
     set -l qs_pkgbuild_dir $script_dir/patches/quickshell-git
@@ -340,7 +416,7 @@ if set -q _flag_pin_quickshell
 end
 
 # ─────────────────────────────────────────────────────────
-# 6. Setup Hyprland Auto-Start
+# 7. Setup Hyprland Auto-Start
 # ─────────────────────────────────────────────────────────
 if not set -q _flag_skip_autostart; and test -L ~/.config/hypr
     set -l fish_config ~/.config/fish/config.fish
@@ -366,7 +442,7 @@ if not set -q _flag_skip_autostart; and test -L ~/.config/hypr
 end
 
 # ─────────────────────────────────────────────────────────
-# 7. Reload Hyprland
+# 8. Reload Hyprland
 # ─────────────────────────────────────────────────────────
 if pgrep -x Hyprland &>/dev/null; and test -L ~/.config/hypr
     log 'Reloading Hyprland config...'
@@ -381,9 +457,10 @@ echo
 success 'Hugo setup complete!'
 echo
 log 'Next steps:'
-echo '  1. Fix lock screen rendering: ./install-hugo.fish --pin-quickshell'
-echo '  2. Apply privacy patch: ./install-hugo.fish --privacy-patch'
-echo '  3. Apply battery patches: ./install-hugo.fish --battery-patch'
-echo '  4. Configure git: git config --global user.email "hugo.sibony@epita.fr"'
-echo '  5. Generate SSH key: ssh-keygen -t ed25519 -C "hugo.sibony@epita.fr"'
-echo '  6. Reboot to test auto-start'
+echo '  1. Apply all patches: ./install-hugo.fish --all'
+echo '  2. Or individually:'
+echo '     - Privacy patch: ./install-hugo.fish --privacy-patch'
+echo '     - Battery patches: ./install-hugo.fish --battery-patch'
+echo '     - GPU patches: ./install-hugo.fish --gpu-patch'
+echo '  3. Fix lock screen: ./install-hugo.fish --pin-quickshell'
+echo '  4. Reboot to test auto-start'
