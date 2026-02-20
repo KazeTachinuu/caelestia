@@ -1,0 +1,14 @@
+{
+  "privacy": [
+    "001-privacy-notifgroup.patch"
+  ],
+  "battery": [
+    "002-battery-statusicons.patch",
+    "003-battery-tabs.patch",
+    "004-battery-content.patch",
+    "005-battery-dashboard.patch"
+  ],
+  "gpu": [
+    "006-gpu-intel-systemusage.patch"
+  ]
+}

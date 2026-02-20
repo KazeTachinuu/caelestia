@@ -1,0 +1,46 @@
+--- a/modules/dashboard/Tabs.qml
++++ b/modules/dashboard/Tabs.qml
+@@ -6,6 +6,7 @@
+ import qs.config
+ import Quickshell
+ import Quickshell.Widgets
++import Quickshell.Services.UPower
+ import QtQuick
+ import QtQuick.Controls
+
+@@ -46,6 +47,22 @@
+         }
+
+         Tab {
++            id: batteryTab
++            readonly property bool show: UPower.displayDevice.isLaptopBattery
++            clip: true
++            iconName: "battery_full"
++            text: qsTr("Battery")
++
++            states: State {
++                when: !batteryTab.show
++                PropertyChanges {
++                    target: batteryTab
++                    width: 0
++                }
++            }
++        }
++
++        Tab {
+             iconName: "cloud"
+             text: qsTr("Weather")
+         }
+@@ -60,10 +77,10 @@
+         id: indicator
+
+         anchors.top: bar.bottom
+-        anchors.topMargin: 5
++        anchors.topMargin: Config.dashboard.sizes.tabIndicatorSpacing
+
+         implicitWidth: bar.currentItem.implicitWidth
+-        implicitHeight: 3
++        implicitHeight: Config.dashboard.sizes.tabIndicatorHeight
+
+         x: {
+             const tab = bar.currentItem;

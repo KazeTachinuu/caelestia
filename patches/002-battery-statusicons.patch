@@ -1,0 +1,72 @@
+--- a/modules/bar/components/StatusIcons.qml
++++ b/modules/bar/components/StatusIcons.qml
+@@ -230,33 +230,49 @@
+             }
+         }
+
+-        // Battery icon
++        // Battery icon with percentage
+         WrappedLoader {
+             name: "battery"
+             active: Config.bar.status.showBattery
+
+-            sourceComponent: MaterialIcon {
+-                animate: true
+-                text: {
+-                    if (!UPower.displayDevice.isLaptopBattery) {
+-                        if (PowerProfiles.profile === PowerProfile.PowerSaver)
+-                            return "energy_savings_leaf";
+-                        if (PowerProfiles.profile === PowerProfile.Performance)
+-                            return "rocket_launch";
+-                        return "balance";
++            sourceComponent: ColumnLayout {
++                spacing: Appearance.spacing.smaller / 2
++
++                MaterialIcon {
++                    Layout.alignment: Qt.AlignHCenter
++                    animate: true
++                    text: {
++                        if (!UPower.displayDevice.isLaptopBattery) {
++                            if (PowerProfiles.profile === PowerProfile.PowerSaver)
++                                return "energy_savings_leaf";
++                            if (PowerProfiles.profile === PowerProfile.Performance)
++                                return "rocket_launch";
++                            return "balance";
++                        }
++
++                        const perc = UPower.displayDevice.percentage;
++                        const charging = [UPowerDeviceState.Charging, UPowerDeviceState.FullyCharged, UPowerDeviceState.PendingCharge].includes(UPower.displayDevice.state);
++                        if (perc === 1)
++                            return charging ? "battery_charging_full" : "battery_full";
++                        let level = Math.floor(perc * 7);
++                        if (charging && (level === 4 || level === 1))
++                            level--;
++                        return charging ? `battery_charging_${(level + 3) * 10}` : `battery_${level}_bar`;
+                     }
++                    color: !UPower.onBattery || UPower.displayDevice.percentage > 0.2 ? root.colour : Colours.palette.m3error
++                    fill: 1
++                }
+
+-                    const perc = UPower.displayDevice.percentage;
+-                    const charging = [UPowerDeviceState.Charging, UPowerDeviceState.FullyCharged, UPowerDeviceState.PendingCharge].includes(UPower.displayDevice.state);
+-                    if (perc === 1)
+-                        return charging ? "battery_charging_full" : "battery_full";
+-                    let level = Math.floor(perc * 7);
+-                    if (charging && (level === 4 || level === 1))
+-                        level--;
+-                    return charging ? `battery_charging_${(level + 3) * 10}` : `battery_${level}_bar`;
++                // Battery percentage text
++                StyledText {
++                    Layout.alignment: Qt.AlignHCenter
++                    visible: UPower.displayDevice.isLaptopBattery
++                    animate: true
++                    text: Math.round(UPower.displayDevice.percentage * 100) + "%"
++                    color: !UPower.onBattery || UPower.displayDevice.percentage > 0.2 ? root.colour : Colours.palette.m3error
++                    font.pointSize: Appearance.font.size.small
++                    font.family: Appearance.font.family.mono
+                 }
+-                color: !UPower.onBattery || UPower.displayDevice.percentage > 0.2 ? root.colour : Colours.palette.m3error
+-                fill: 1
+             }
+         }
+     }

@@ -1,0 +1,46 @@
+--- a/modules/lock/NotifGroup.qml
++++ b/modules/lock/NotifGroup.qml
+@@ -277,40 +277,18 @@
+         }
+     }
+
++    // Privacy-friendly version: shows summary only, hides body content
+     component NotifLine: StyledText {
+         id: notifLine
+
+         required property Notifs.Notif modelData
+
+         Layout.fillWidth: true
+-        textFormat: Text.MarkdownText
+-        text: {
+-            const summary = modelData.summary.replace(/\n/g, " ");
+-            const body = modelData.body.replace(/\n/g, " ");
+-            const colour = root.urgency === "critical" ? Colours.palette.m3secondary : Colours.palette.m3outline;
+-
+-            if (metrics.text === metrics.elidedText)
+-                return `${summary} <span style='color:${colour}'>${body}</span>`;
+-
+-            const t = metrics.elidedText.length - 3;
+-            if (t < summary.length)
+-                return `${summary.slice(0, t)}...`;
+-
+-            return `${summary} <span style='color:${colour}'>${body.slice(0, t - summary.length)}...</span>`;
+-        }
++        text: modelData.summary.replace(/\n/g, " ")
+         color: root.urgency === "critical" ? Colours.palette.m3onSecondaryContainer : Colours.palette.m3onSurface
++        elide: Text.ElideRight
+
+         Component.onCompleted: modelData.lock(this)
+         Component.onDestruction: modelData.unlock(this)
+-
+-        TextMetrics {
+-            id: metrics
+-
+-            text: `${notifLine.modelData.summary} ${notifLine.modelData.body}`.replace(/\n/g, " ")
+-            font.pointSize: notifLine.font.pointSize
+-            font.family: notifLine.font.family
+-            elideWidth: notifLine.width
+-            elide: Text.ElideRight
+-        }
+     }
+ }

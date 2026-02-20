@@ -3,6 +3,15 @@
 This is the main repo of the caelestia dots and contains the user configs for
 apps. This repo also includes an install script to install the entire dots.
 
+## Hugo's Patches
+
+This fork includes optional quickshell patches applied via unified diffs. Run `./install-hugo.fish --help` for usage.
+
+Available patch groups:
+- **privacy** — hides notification body text on the lock screen
+- **battery** — battery percentage in the status bar + dashboard tab
+- **gpu** — Intel GPU monitoring support
+
 ## Installation
 
 Simply clone this repo and run the install script (you need
